@@ -15,6 +15,7 @@ bot.
 
 import logging
 import instaloader_test as ig_get_links
+import urllib
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InputMediaDocument
 from telegram.ext import (
@@ -36,7 +37,8 @@ logger = logging.getLogger(__name__)
 MENU, ACTION, DOWNLOAD_PHOTO_REQUEST, DOWNLOAD_STORIES_REQUEST = range(4)
 reply_keyboard = [['Скачать фото', 'Посмотреть stories', 'pass']]
 
-def start(update: Update, _: CallbackContext) -> int:
+
+def start(update: Update, context: CallbackContext) -> int:
     reply_markup = ReplyKeyboardMarkup(
         keyboard=reply_keyboard,
         resize_keyboard=True
@@ -51,8 +53,7 @@ def start(update: Update, _: CallbackContext) -> int:
     return ACTION
 
 
-def choose_action(update: Update, _: CallbackContext) -> int:
-    print("e")
+def choose_action(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
     user_answr = update.message.text
     logger.info("Action of %s: %s", user.first_name, user_answr)
@@ -75,36 +76,93 @@ def choose_action(update: Update, _: CallbackContext) -> int:
         )
         return DOWNLOAD_STORIES_REQUEST
 
+    elif update.message.text == "/cancel":
+        return cancel(update=update, context=context)
+
 
 def download_and_send_photo(update: Update, context: CallbackContext) -> int:
-    logger.info("Photo link is %s", update.message.text)
-    photo_link = update.message.text
-    update.message.reply_text(
-        '*Ожидайте*',
-    )
+    text = update.message.text
 
-    links_request = get_links_from_post(photo_link)
-    print(links_request)
+    if text == "/cancel":
+        return cancel(update=update, context=context)
+    elif not check_link_possibility(text):
+        print("d")
+        update.message.reply_photo("https://ibb.co/sqhpzM2",
+                                   caption=('Неверный формат.\n Убедидетесь в правильности вводимой ссылки,'
+                                            ' она должна соответствовать одному из предложенных образцов:\n'
+                                            '\n'
+                                            '1. https://www.instagram.com/p/CMnW2SBMKiu/\n'
+                                            '2. www.instagram.com/p/CMnW2SBMKiu/\n'
+                                            '3. instagram.com/p/CMnW2SBMKiu/\n'),
+                                   reply_markup=ReplyKeyboardRemove())
+    else:
+        logger.info("Photo link is %s", update.message.text)
 
-    if links_request[0] == "GraphImage":
-        try:
-            context.bot.send_document(
-                update.effective_chat.id,
-                document=links_request[1])
-        except:
-            logger.info("Can't send photo:", links_request[1])
+        update.message.reply_text(
+            '*Ожидайте*',
+            reply_markup=ReplyKeyboardRemove()
+        )
 
-    elif links_request[0] == "GraphSidecar":
+        context.bot.send_chat_action(update.effective_chat.id, "upload_document")
 
-        for url in (links_request[1]):
+        links_request = get_links_from_post(text)
+
+        if links_request is None:
+            links_request = get_links_from_post(text)
+            logger.info("Link is broken:")
+            update.message.reply_photo("https://ibb.co/8mPwsP6",
+                                       caption=('Ошибка получения информации от instagram.'
+                                                '\nДля начала, убедидетесь в правильности вводимой ссылки,'
+                                                ' она должна соответствовать одному из предложенных образцов:\n'
+                                                '\n'
+                                                '1. https://www.instagram.com/p/CMnW2SBMKiu/\n'
+                                                '2. www.instagram.com/p/CMnW2SBMKiu/\n'
+                                                '3. instagram.com/p/CMnW2SBMKiu/\n'),
+                                                reply_markup=ReplyKeyboardRemove())
+            update.message.reply_text('Если ошибка продолжает появляться, то обязательно сообщите о ней в'
+                                                ' telegram @volinvd')
+
+            return menu(update=update, context=context)
+
+
+        if links_request[0] == "GraphImage":
             try:
                 context.bot.send_document(
                     update.effective_chat.id,
-                    document=url)
-            except: logger.info("Can't send photo:", url)
+                    document=links_request[1])
+            except:
+                logger.info("Can't send photo:", links_request[1])
+                update.message.reply_photo("https://ibb.co/8mPwsP6",
+                                           caption=('Ошибка отправки сообщения.'
+                                                    '\nДля начала, убедидетесь в правильности вводимой ссылки,'
+                                                    ' она должна соответствовать одному из предложенных образцов:\n'
+                                                    '\n'
+                                                    '1. https://www.instagram.com/p/CMnW2SBMKiu/\n'
+                                                    '2. www.instagram.com/p/CMnW2SBMKiu/\n'
+                                                    '3. instagram.com/p/CMnW2SBMKiu/\n',
 
-    return ACTION
+                                                    'Если ошибка продолжает появляться, то обязательно сообщите о ней в'
+                                                    ' telegram @volinvd'),
+                                           reply_markup=ReplyKeyboardRemove())
 
+        elif links_request[0] == "GraphSidecar":
+
+            for url in (links_request[1]):
+                try:
+                    context.bot.send_document(
+                        update.effective_chat.id,
+                        document=url)
+                except:
+                    logger.info("Can't send photo:", url)
+
+    return menu(update=update, context=context)
+
+
+def check_link_possibility(link):
+    if "instagram.com" not in link:
+        return False
+
+    return True
 
 
 def get_links_from_post(link):
@@ -114,6 +172,7 @@ def get_links_from_post(link):
     logger.info("get_links: urls is %s", info)
 
     return info
+
 
 def get_links_from_story(username):
     ig = ig_get_links.GetLinksIG()
@@ -131,35 +190,33 @@ def download_and_send_stories(update: Update, context: CallbackContext) -> int:
         '*Ожидайте*',
         reply_markup=ReplyKeyboardRemove(),
     )
-
+    context.bot.send_chat_action(update.effective_chat.id, "upload_document")
     links_request = get_links_from_story(username)
-    print(links_request)
 
     for elem in links_request[1]:
         try:
+            context.bot.send_chat_action(update.effective_chat.id, "upload_document")
             context.bot.send_document(
                 update.effective_chat.id,
                 document=elem)
         except:
             logger.info("Can't send photo:", links_request[1])
 
-    return MENU
+    return menu(update=update, context=context)
 
 
-def menu(update: Update, _: CallbackContext) -> int:
-    print('DDDDDDDDDDD')
+def menu(update: Update, context: CallbackContext) -> int:
     reply_keyboard = [['Скачать фото', 'Посмотреть stories', 'pass']]
 
     update.message.reply_text(
-        'Что вы хотите сделать?',
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=False),
+        'Вы хотите сделать что-нибудь еще?',
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=False, resize_keyboard=True),
     )
 
     return ACTION
 
 
-
-def cancel(update: Update, _: CallbackContext) -> int:
+def cancel(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
     logger.info("User %s canceled the conversation.", user.first_name)
     update.message.reply_text(
@@ -174,13 +231,11 @@ def main() -> None:
     updater = Updater(token="1663996570:AAEWn7SRSkVPqftZHX8fC994t_-6b95CnFY",
                       use_context=True)
 
-    # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            MENU: [MessageHandler(Filters.regex('^(Скачать фото|Посмотреть stories|pass)$'), menu)],
             ACTION: [MessageHandler(Filters.text, choose_action)],
             DOWNLOAD_PHOTO_REQUEST: [MessageHandler(Filters.text, download_and_send_photo)],
             DOWNLOAD_STORIES_REQUEST: [MessageHandler(Filters.text, download_and_send_stories)],
