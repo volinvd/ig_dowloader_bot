@@ -15,7 +15,7 @@ bot.
 
 import logging
 import instaloader
-import instaloader_test as ig_get_links
+import download_ig as ig_get_links
 import urllib
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update, InputMediaDocument, InlineKeyboardMarkup, \
@@ -33,12 +33,16 @@ from telegram.ext import (
 updater = Updater(token="1663996570:AAEWn7SRSkVPqftZHX8fC994t_-6b95CnFY",
                   use_context=True)
 
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
-)
-
 logger = logging.getLogger(__name__)
+tg_logger = logging.getLogger('telegram')
+tg_logger.setLevel(logging.INFO)
+ig_logger = logging.getLogger('download_ig')
+ig_logger.setLevel(logging.DEBUG)
+urllib_logger = logging.getLogger('urllib3')
+urllib_logger.setLevel(logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(funcName)s - %(levelname)s - %(message)s', level=logging.DEBUG
+)
 
 MENU, ACTION, DOWNLOAD_PHOTO_REQUEST, DOWNLOAD_STORIES_REQUEST, GET_ACCOUNT_INFORMATION = range(5)
 reply_keyboard = [['Скачать фото', 'Посмотреть stories', 'Информация о профиле']]
@@ -49,9 +53,13 @@ reply_error_keyboard = [['Главное меню', 'Завершить']]
 keyboard = [[InlineKeyboardButton("Главное меню", callback_data='Главное меню'),
              InlineKeyboardButton("Завершить", callback_data='Завершить')]]
 
-ERROR_REPLY_MARKUP = ReplyKeyboardRemove() # InlineKeyboardMarkup(keyboard)
+ERROR_REPLY_MARKUP = ReplyKeyboardRemove()  # InlineKeyboardMarkup(keyboard)
+
 
 def start(update: Update, context: CallbackContext) -> int:
+    user = update.message.from_user
+    logger.debug("%s %s starts the bot. Info: id - %s, username - %s, lg_code - %s",
+                 user.first_name, user.last_name, user.id, user.username, user.language_code)
     reply_markup = ReplyKeyboardMarkup(
         keyboard=reply_keyboard,
         resize_keyboard=True
@@ -76,7 +84,7 @@ def choose_action(update: Update, context: CallbackContext) -> int:
     user_answr = update.message.text
 
     if update.message.text in reply_keyboard[0] or update.message.text in actions:
-        logger.info("Action of %s: %s", user.first_name, user_answr)
+        logger.info("Action of %s %s: %s", user.first_name, user.last_name, user_answr)
         update.message.reply_text(
             "Хорошо",
             reply_markup=ReplyKeyboardRemove(),
@@ -126,6 +134,7 @@ def choose_action(update: Update, context: CallbackContext) -> int:
 
 def download_and_send_photo(update: Update, context: CallbackContext) -> int:
     text = update.message.text
+    logger.info("Got text: %s", text)
     reply_error_markup = ReplyKeyboardMarkup(
         keyboard=reply_error_keyboard,
         resize_keyboard=True
@@ -143,6 +152,7 @@ def download_and_send_photo(update: Update, context: CallbackContext) -> int:
             reply_markup=ReplyKeyboardRemove(),
         )
     elif not check_link_possibility(text):
+        logger.info("Got text: %s", text)
         update.message.reply_photo("https://ibb.co/sqhpzM2",
                                    caption=('Неверный формат ссылки фотографии.'
                                             '\nУбедидетесь в правильности вводимой ссылки,'
@@ -152,10 +162,9 @@ def download_and_send_photo(update: Update, context: CallbackContext) -> int:
                                             '2. www.instagram.com/p/CMnW2SBMKiu/\n'
                                             '3. instagram.com/p/CMnW2SBMKiu/\n'),
                                    reply_markup=reply_error_markup)
+        logger.info("Link unsupported: %s", text)
         return
     else:
-        logger.info("Photo link is %s", update.message.text)
-
         update.message.reply_text(
             'Пожалуйста, подождите',
             reply_markup=ReplyKeyboardRemove()
@@ -164,10 +173,11 @@ def download_and_send_photo(update: Update, context: CallbackContext) -> int:
         context.bot.send_chat_action(update.effective_chat.id, "upload_document")
 
         links_request = get_links_from_post(text)
+        logger.info("Link request: %s", links_request)
 
         if links_request is None:
             links_request = get_links_from_post(text)
-            logger.info("Link is broken:")
+            logger.warning("Link is broken: %s", links_request)
             context.bot.send_photo(update.message.chat.id, "https://ibb.co/8mPwsP6",
                                    caption=('Ошибка получения информации от Instagram.'
                                             '\nДля начала, убедидетесь в правильности вводимой ссылки,'
@@ -189,7 +199,7 @@ def download_and_send_photo(update: Update, context: CallbackContext) -> int:
                     update.effective_chat.id,
                     document=links_request[1])
             except:
-                logger.info("Can't send photo:", links_request[1])
+                logger.warning("Can't send photo:", links_request[1])
                 update.message.reply_photo("https://ibb.co/8mPwsP6",
                                            caption=('Ошибка отправки сообщения.'
                                                     '\nДля начала, убедидетесь в правильности вводимой ссылки,'
@@ -204,14 +214,13 @@ def download_and_send_photo(update: Update, context: CallbackContext) -> int:
                                            reply_markup=reply_error_keyboard)
 
         elif links_request[0] == "GraphSidecar":
-
             for url in (links_request[1]):
                 try:
                     context.bot.send_document(
                         update.effective_chat.id,
                         document=url)
                 except:
-                    logger.info("Can't send photo:", url)
+                    logger.warning("Can't send photo: %s", url)
 
         return menu(update=update, context=context)
 
@@ -228,6 +237,7 @@ def inline_error_button(update: Update, context: CallbackContext) -> int:
 
 
 def check_link_possibility(link):
+    logger.debug("Link is %s", link)
     if "instagram.com" not in link:
         return False
 
@@ -235,18 +245,18 @@ def check_link_possibility(link):
 
 
 def get_links_from_post(link):
+    logger.debug("Link is %s", link)
     ig = ig_get_links.GetLinksIG()
     info = ig.get_photo_urls(link)
 
-    logger.info("get_links: urls is %s", info)
+    logger.debug("Urls is %s", info)
 
     return info
 
 
 def download_and_send_stories(update: Update, context: CallbackContext) -> int:
-    logger.info("User link is %s", update.message.text)
+    logger.info("User account link is %s", update.message.text)
     profile_link = update.message.text
-
 
     reply_error_markup = ReplyKeyboardMarkup(
         keyboard=reply_error_keyboard,
@@ -277,9 +287,12 @@ def download_and_send_stories(update: Update, context: CallbackContext) -> int:
                                             '2. www.instagram.com/volinvd/?hl=ru\n'
                                             '3. www.instagram.com/volinvd/\n'),
                                    reply_markup=reply_error_markup)
+        logger.info("Invalid link format %s", profile_link)
     else:
         ig = ig_get_links.GetLinksIG()
         username = ig.username_from_link(profile_link)
+
+        logger.debug("Username from link is %s", username)
 
         if ig.is_private_account(username):
             update.message.reply_photo("https://ibb.co/5xcD6Xt",
@@ -287,6 +300,7 @@ def download_and_send_stories(update: Update, context: CallbackContext) -> int:
                                                 '\nК сожалению, получить доступ к закрытому аккаунту невозможно.'
                                                 ),
                                        reply_markup=reply_error_markup)
+            logger.debug("Account is private %s", info)
         else:
             update.message.reply_text(
                 'Пожалуйста, подождите',
@@ -302,25 +316,27 @@ def download_and_send_stories(update: Update, context: CallbackContext) -> int:
                         update.effective_chat.id,
                         document=elem)
                 except:
-                    logger.info("Can't send photo:", links_request[1])
+                    logger.warning("Can't send photo:", links_request[1])
 
         return menu(update=update, context=context)
 
 
 def get_links_from_story(username):
+    logger.debug("Username is %s", username)
     ig = ig_get_links.GetLinksIG()
     info = ig.get_story_urls(username)
 
-    logger.info("get_links: urls is %s", info)
+    logger.info("Urls is %s", info)
 
     return info
 
 
 def get_profile_info(username):
+    logger.debug("get_links: urls is %s", username)
     ig = ig_get_links.GetLinksIG()
     info = ig.get_profile_info(username)
 
-    logger.info("get_info: is %s", info)
+    logger.info("Info is %s", info)
 
     return info
 
@@ -360,6 +376,7 @@ def send_about_profile(update: Update, context: CallbackContext) -> int:
                                             '3. www.instagram.com/volinvd/\n'
                                             '4. instagram.com/volinvd/\n'),
                                    reply_markup=reply_error_markup)
+        logger.info("Invalid link format %s", profile_link)
     else:
         update.message.reply_text(
             'Пожалуйста, подождите',
@@ -379,7 +396,7 @@ def send_about_profile(update: Update, context: CallbackContext) -> int:
                 info["count_of_followees"], info["count_of_posts"], info["count_of_igtv"], info["type"]
 
             update.message.reply_photo(profile_picture_url,
-                                   caption=(f"""
+                                       caption=(f"""
 Информация по аккаунту {username}:
 
 Имя пользователя: {fullname}
@@ -390,7 +407,7 @@ def send_about_profile(update: Update, context: CallbackContext) -> int:
 Количество записей: {count_of_posts}
 Количество видео Instagram TV: {count_of_igtv}
 Тип аккаунта: {type}"""),
-                                   reply_markup=ReplyKeyboardRemove())
+                                       reply_markup=ReplyKeyboardRemove())
         except instaloader.exceptions.ProfileNotExistsException:
             update.message.reply_photo("https://ibb.co/pwQnzMx",
                                        caption=('Указана сылка на несуществующий профиль.'
@@ -402,6 +419,7 @@ def send_about_profile(update: Update, context: CallbackContext) -> int:
                                                 '3. www.instagram.com/volinvd/\n'
                                                 '4. instagram.com/volinvd/\n'),
                                        reply_markup=reply_error_markup)
+            logger.info("Profile not exists %s", profile_link)
 
         return menu(update=update, context=context)
 
@@ -410,12 +428,13 @@ def get_profile_picture_link(username):
     ig = ig_get_links.GetLinksIG()
     info = ig.get_profile_photo_link(username)
 
-    logger.info("get_profile_picture_link: urls is %s", info)
+    logger.info("Profile picture link is %s", info)
 
     return info
 
 
 def menu(update: Update, context: CallbackContext) -> int:
+    logger.debug("Menu")
     reply_keyboard = [['Скачать фото', 'Посмотреть stories', 'Информация о профиле']]
 
     context.bot.send_message(update.effective_chat.id,
@@ -428,6 +447,8 @@ def menu(update: Update, context: CallbackContext) -> int:
 
 
 def cancel(update: Update, context: CallbackContext) -> int:
+    user = update.message.from_user
+    logger.info("Conversation for %s %s (%s) ended", user.first_name, user.last_name, user.username)
     update.message.reply_text('Диалог завершен. Вы можете заново обратиться ко мне используя команду /start.',
                               reply_markup=ReplyKeyboardRemove())
 
@@ -452,7 +473,6 @@ def main() -> None:
     )
 
     dispatcher.add_handler(conv_handler)
-    dispatcher.add_handler(CallbackQueryHandler(inline_error_button))
     dispatcher.add_handler(CommandHandler("cancel", cancel))
 
     # Start the Bot
